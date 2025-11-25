@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScholarOS: Kirby Team Edition</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Marked.js -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <!-- Cute Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Varela+Round&display=swap" rel="stylesheet">
+    
+    <!-- Firebase Integration -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove, getDoc } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-firestore.js";
+
+        // --- Robust Config Logic ---
+        let app, auth, db;
+        let appId = 'scholar-os-default';
+        window.fb = { isReady: false }; // Default state
+
+        async function initFirebase(config) {
+            try {
+                console.log("Attempting to init Firebase with:", config);
+                
+                if (!config || !config.apiKey) {
+                    throw new Error("Config missing 'apiKey'.");
+                }
+
+                app = initializeApp(config);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                
+                // Try auth
+                await signInAnonymously(auth);
+                
+                // Expose to global
+                window.fb = { auth, db, doc, onSnapshot, setDoc, updateDoc, arrayUnion, arrayRemove, appId, isReady: true };
+                
+                // Trigger UI update
+                document.dispatchEvent(new Event('firebase-ready'));
+                console.log("Firebase Connected Successfully!");
+                showToast("Cloud Connected!", "success");
+                
+            } catch (e) {
+                console.error("Firebase Init Failed:", e);
+                // Show visible error in the setup area
+                const errEl = document.getElementById('firebase-error-log');
+                if(errEl) {
+                    errEl.classList.remove('hidden');
+                    errEl.innerText = `Error: ${e.message}. Check Console (F12).`;
+                }
+                // Fallback to offline
+                console.warn("Running in Offline Mode.");
+            }
+        }
+
+        // 1. Try LocalStorage (User Setup)
+        const localConfigStr = localStorage.getItem('custom_firebase_config');
+        if (localConfigStr) {
+            try {
+                const localConfig = JSON.parse(localConfigStr);
+                initFirebase(localConfig);
+            } catch(e) {
+                console.error("Corrupt local config", e);
+                localStorage.removeItem('custom_firebase_config');
+            }
+        } 
+        // 2. Try Env (Hosting)
+        else if (typeof __firebase_config !== 'undefined') {
+            initFirebase(JSON.parse(__firebase_config));
+            if (typeof __app_id !== 'undefined') appId = __app_id;
+        }
+
+        // --- Manual Parser Helper ---
+        // This avoids 'eval' and 'new Function' to prevent CSP errors and handles JS object syntax
+        window.parseFirebaseString = (str) => {
+            const config = {};
+            // Extract key: "value" patterns
+            // Supports: apiKey: "xyz", apiKey: 'xyz', "apiKey": "xyz"
+            const regex = /["']?(\w+)["']?\s*:\s*["']([^"']+)["']/g;
+            let match;
+            while ((match = regex.exec(str)) !== null) {
+                config[match[1]] = match[2];
+            }
+            return config;
+        }
+
+        window.saveFirebaseConfig = (rawInput) => {
+            try {
+                // Use the robust manual parser
+                const config = window.parseFirebaseString(rawInput);
+
+                // Validate
+                if (!config.apiKey || !config.authDomain) {
+                    throw new Error("Could not extract 'apiKey' or 'authDomain' from text. Please make sure you pasted the full object { ... }");
+                }
+                
+                // Save
+                localStorage.setItem('custom_firebase_config', JSON.stringify(config));
+                alert("Configuration saved! Reloading to connect...");
+                window.location.reload();
+                
+            } catch(e) {
+                alert("Setup Error: " + e.message);
+            }
+        }
+        
+        window.clearFirebaseConfig = () => {
+            if(confirm("Reset cloud connection?")) {
+                localStorage.removeItem('custom_firebase_config');
+                window.location.reload();
+            }
+        }
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['"Varela Round"', 'sans-serif'] },
+                    colors: {
+                        kirby: { 100: '#ffe4e1', 200: '#ffb7c5', 300: '#ff9eb5', 500: '#ff69b4', 600: '#e05297', dark: '#5d3a46', feet: '#d60036', cheek: '#f788a8' },
+                        star: { yellow: '#ffed4a', gold: '#ffd700' }
+                    },
+                    boxShadow: { 'bubbly': '4px 4px 0px 0px rgba(0,0,0,0.1)', 'bubbly-hover': '2px 2px 0px 0px rgba(0,0,0,0.1)' }
+                }
+            }
+        }
+    </script>
+    <style>
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #fff0f5; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #ffb7c5; border-radius: 4px; border: 2px solid #fff0f5; }
+        body { background-color: #fff0f5; color: #5d3a46; }
+        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 2px solid #fff; box-shadow: 0 8px 32px rgba(255, 105, 180, 0.1); }
+        .prose p { font-size: 1.05rem; line-height: 1.7; color: #5d3a46; margin-bottom: 1em; }
+        .prose h3 { font-size: 1.3rem; color: #e05297; margin-top: 1.2em; font-weight: 800; }
+        .prose strong { color: #e05297; font-weight: 900; }
+        
+        @keyframes float { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-10px); } }
+        .animate-kirby-float { animation: float 3s ease-in-out infinite; }
+        @keyframes gulp { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        .animate-gulp { animation: gulp 0.4s ease-out; }
+        .kirby-mouth-open { width: 50px !important; height: 60px !important; border-radius: 50% !important; background-color: #720e1e !important; border-bottom: 4px solid #ff9eb5; transform: translateY(10px); }
+        .doc-being-eaten { transform: translateY(-120px) scale(0.2) rotate(180deg) !important; opacity: 0 !important; }
+        .toast-enter { animation: slideIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+        @keyframes slideIn { from { transform: translateX(120%) scale(0.8); opacity: 0; } to { transform: translateX(0) scale(1); opacity: 1; } }
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden">
+
+    <div id="toast-container" class="fixed top-6 right-6 z-[70] flex flex-col gap-3 pointer-events-none"></div>
+
+    <!-- Sidebar -->
+    <aside class="w-72 flex-shrink-0 bg-white m-4 mr-0 rounded-3xl shadow-bubbly flex flex-col z-20 border-2 border-pink-100 overflow-hidden">
+        <!-- Header -->
+        <div class="p-5 bg-kirby-100 flex items-center justify-center flex-col border-b-2 border-white relative overflow-hidden group cursor-pointer" onclick="copyRoomLink()">
+            <div class="absolute top-2 right-2 text-kirby-500 opacity-0 group-hover:opacity-100 transition"><i class="fa-solid fa-link"></i></div>
+            <div class="w-14 h-14 bg-kirby-200 rounded-full flex items-center justify-center text-white text-2xl shadow-inner mb-2 animate-kirby-float border-4 border-white relative">
+                <div class="absolute top-3 left-3 w-1.5 h-2.5 bg-kirby-dark rounded-full"></div>
+                <div class="absolute top-3 right-3 w-1.5 h-2.5 bg-kirby-dark rounded-full"></div>
+                <div class="absolute top-5 left-1/2 transform -translate-x-1/2 w-2 h-1 bg-red-400 rounded-b-full"></div>
+            </div>
+            <h1 class="text-lg font-black text-kirby-600 tracking-wide">ScholarOS</h1>
+            <div class="flex items-center gap-1 mt-1">
+                <span id="mode-badge" class="text-[10px] text-gray-500 font-bold bg-white px-2 py-0.5 rounded-full border border-gray-200">Offline</span>
+                <div id="online-indicator" class="w-2 h-2 bg-gray-300 rounded-full"></div>
+            </div>
+        </div>
+        
+        <!-- Shared Lists -->
+        <div class="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-6">
+            
+            <!-- Shared Papers List -->
+            <div>
+                <h2 class="text-xs font-bold text-kirby-300 uppercase tracking-wider mb-2 ml-1 flex justify-between items-center">
+                    <span><i class="fa-solid fa-layer-group mr-1"></i> Shared Papers</span>
+                    <span id="paper-count" class="bg-kirby-100 text-kirby-500 px-1.5 rounded-md text-[10px]">0</span>
+                </h2>
+                <div id="shared-papers-list" class="space-y-2">
+                    <div class="text-center text-[10px] text-kirby-300 py-4 italic">
+                        <span id="shared-status-text">Connect Cloud to sync</span>
+                        <button onclick="document.getElementById('firebase-config-details').open = true" class="block mx-auto mt-2 text-kirby-500 underline cursor-pointer">Setup</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Deadlines -->
+            <div>
+                <h2 class="text-xs font-bold text-kirby-300 uppercase tracking-wider mb-2 ml-1">
+                    <i class="fa-solid fa-flag-checkered mr-1"></i> Deadlines
+                </h2>
+                <div id="ddl-list" class="space-y-2"></div>
+            </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="p-4 bg-kirby-100/50 m-2 rounded-2xl border border-white">
+            <!-- Cloud Setup (Robust) -->
+            <details id="firebase-config-details" class="group mb-2">
+                <summary class="text-xs font-bold text-kirby-500 cursor-pointer hover:text-kirby-600 list-none flex items-center justify-between bg-white p-2 rounded-lg shadow-sm">
+                    <span><i class="fa-solid fa-cloud mr-1"></i> Cloud Setup</span>
+                    <i class="fa-solid fa-chevron-down text-[10px]"></i>
+                </summary>
+                <div class="mt-2 space-y-2 bg-white p-2 rounded-lg border border-pink-100">
+                    <p class="text-[9px] text-kirby-400 leading-tight mb-1">Paste the full Firebase config object (including { }):</p>
+                    <textarea id="firebase-json-input" class="w-full h-24 text-[9px] p-1 border border-pink-100 rounded bg-slate-50 resize-none font-mono leading-tight" placeholder="{ apiKey: '...', ... }"></textarea>
+                    <div id="firebase-error-log" class="hidden text-[9px] text-red-500 font-mono bg-red-50 p-1 rounded border border-red-100"></div>
+                    <div class="flex gap-2">
+                        <button onclick="saveFirebaseConfig(document.getElementById('firebase-json-input').value)" class="flex-1 bg-kirby-500 text-white text-[10px] py-1.5 rounded-md font-bold hover:bg-kirby-600 shadow-bubbly active:translate-y-0.5 active:shadow-none transition">Connect</button>
+                        <button onclick="clearFirebaseConfig()" class="px-3 bg-slate-200 text-slate-500 text-[10px] py-1.5 rounded-md font-bold hover:bg-slate-300" title="Reset Config">Reset</button>
+                    </div>
+                </div>
+            </details>
+
+            <!-- API Settings -->
+            <h3 class="text-xs font-bold text-kirby-500 mb-2 ml-1"><i class="fa-solid fa-robot mr-1"></i> AI Model</h3>
+            <input type="password" id="api-key-input" placeholder="DeepSeek API Key..." class="w-full text-[10px] p-2 bg-white border-2 border-transparent rounded-lg text-kirby-dark placeholder-kirby-300 focus:border-kirby-300 focus:outline-none transition shadow-sm mb-2">
+            <details class="group">
+                <summary class="text-[10px] text-kirby-400 cursor-pointer hover:text-kirby-600 list-none ml-1">Advanced <i class="fa-solid fa-angle-down ml-1"></i></summary>
+                <div class="mt-2 space-y-1">
+                    <input type="text" id="base-url-input" value="https://api.deepseek.com" class="w-full p-1 bg-white rounded text-[10px]" placeholder="Base URL">
+                    <input type="text" id="model-name-input" value="deepseek-chat" class="w-full p-1 bg-white rounded text-[10px]" placeholder="Model">
+                </div>
+            </details>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col h-full relative min-w-0 p-4">
+        <div class="bg-white w-full h-full rounded-3xl shadow-bubbly border-2 border-pink-50 flex flex-col overflow-hidden relative">
+            
+            <!-- Top Bar -->
+            <header class="h-16 bg-white border-b-2 border-pink-50 flex items-center justify-between px-6 z-10 shrink-0">
+                <div class="flex items-center overflow-hidden mr-4">
+                     <div id="status-bubble" class="w-2.5 h-2.5 rounded-full bg-gray-300 mr-3 flex-shrink-0"></div>
+                     <div class="flex flex-col min-w-0">
+                         <div class="flex items-center gap-2">
+                             <h2 id="current-status" class="text-sm font-bold text-kirby-dark truncate">Waiting...</h2>
+                             <button id="btn-delete-paper" onclick="deleteCurrentPaper()" class="hidden text-[10px] text-red-400 hover:text-red-600 hover:bg-red-50 p-1 rounded transition" title="Delete Shared Paper">
+                                 <i class="fa-solid fa-trash"></i>
+                             </button>
+                         </div>
+                         <p id="paper-title-display" class="text-[10px] text-kirby-300 font-bold truncate hidden">Select a paper</p>
+                     </div>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <button onclick="toggleBibtex()" id="btn-bibtex" class="hidden text-xs font-bold text-kirby-500 bg-pink-50 hover:bg-pink-100 px-3 py-1.5 rounded-full transition">
+                        <i class="fa-solid fa-quote-left"></i>
+                    </button>
+                    <button onclick="document.getElementById('file-input').click()" class="text-xs font-bold bg-kirby-500 text-white px-4 py-2 rounded-full shadow-md hover:shadow-lg hover:translate-y-0.5 transition active:scale-95 border-2 border-white">
+                        <i class="fa-solid fa-cloud-arrow-up mr-1.5"></i>Upload
+                    </button>
+                </div>
+            </header>
+
+            <!-- Content Area -->
+            <div class="flex-1 relative overflow-hidden bg-pink-50/30">
+                
+                <!-- Upload Zone -->
+                <div id="upload-zone" class="absolute inset-0 flex flex-col items-center justify-center z-0 p-10 transition-all duration-500">
+                    <div class="w-full h-full border-4 border-dashed border-kirby-200 rounded-3xl flex flex-col items-center justify-center bg-white/50 hover:bg-white/80 hover:border-kirby-400 transition cursor-pointer group" onclick="document.getElementById('file-input').click()">
+                        <div class="w-24 h-24 bg-kirby-100 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition">
+                            <i class="fa-solid fa-file-pdf text-3xl text-kirby-500"></i>
+                        </div>
+                        <h3 class="text-xl font-black text-kirby-dark">Feed the Team!</h3>
+                        <p class="text-xs text-kirby-400 mt-1">Uploads sync to everyone in room</p>
+                        <input type="file" id="file-input" accept=".pdf" class="hidden">
+                    </div>
+                </div>
+
+                <!-- Kirby Animation Layer -->
+                <div id="kirby-eating-layer" class="hidden absolute inset-0 bg-white z-50 flex flex-col items-center justify-center">
+                    <div class="relative w-32 h-32 mb-16"> 
+                        <div id="kirby-body" class="absolute inset-0 bg-kirby-200 rounded-full shadow-xl border-4 border-white z-10 flex items-center justify-center transition-all duration-300">
+                             <div class="absolute top-8 left-8 w-3 h-6 bg-kirby-dark rounded-full"></div>
+                             <div class="absolute top-8 right-8 w-3 h-6 bg-kirby-dark rounded-full"></div>
+                             <div class="absolute top-14 left-4 w-5 h-3 bg-kirby-cheek rounded-full opacity-60"></div>
+                             <div class="absolute top-14 right-4 w-5 h-3 bg-kirby-cheek rounded-full opacity-60"></div>
+                             <div id="kirby-mouth" class="absolute top-16 w-4 h-2 bg-red-400 rounded-b-full transition-all duration-500"></div>
+                        </div>
+                        <div id="arm-l" class="absolute top-14 -left-4 w-8 h-8 bg-kirby-200 rounded-full z-0 transition-transform duration-500"></div>
+                        <div id="arm-r" class="absolute top-14 -right-4 w-8 h-8 bg-kirby-200 rounded-full z-0 transition-transform duration-500"></div>
+                        <div class="absolute -bottom-3 left-6 w-10 h-6 bg-kirby-feet rounded-full -z-10"></div>
+                        <div class="absolute -bottom-3 right-6 w-10 h-6 bg-kirby-feet rounded-full -z-10"></div>
+                    </div>
+                    <div id="doc-element" class="absolute w-12 h-16 bg-white border-2 border-slate-200 rounded shadow-md flex items-center justify-center transition-all duration-1000 ease-in-out" style="top: 60%; opacity: 0;">
+                        <i class="fa-solid fa-file-pdf text-red-400 text-xl"></i>
+                    </div>
+                    <h2 class="text-lg font-black text-kirby-500 mt-4 animate-pulse">Syncing...</h2>
+                </div>
+
+                <!-- Workspace View -->
+                <div id="workspace-view" class="absolute inset-0 flex flex-col hidden opacity-0 transition-opacity duration-500 bg-white">
+                    <div class="flex items-center justify-center gap-4 py-3 bg-white border-b-2 border-pink-50 shrink-0">
+                        <button onclick="switchTab('analysis')" id="tab-analysis" class="px-5 py-1.5 rounded-full font-bold text-xs transition-all bg-kirby-100 text-kirby-600 shadow-inner">Insight</button>
+                        <button onclick="switchTab('chat')" id="tab-chat" class="px-5 py-1.5 rounded-full font-bold text-xs transition-all text-kirby-300 hover:bg-pink-50">Star Chat</button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto custom-scrollbar p-0 relative">
+                        <div id="panel-analysis" class="p-8 max-w-3xl mx-auto min-h-full">
+                            <div id="ai-content" class="prose prose-lg prose-pink max-w-none text-kirby-dark"></div>
+                        </div>
+                        <div id="panel-chat" class="hidden flex flex-col h-full bg-pink-50/30">
+                            <div id="chat-history" class="flex-1 overflow-y-auto p-4 space-y-4">
+                                <div class="flex items-start">
+                                    <div class="w-8 h-8 rounded-full bg-kirby-400 flex items-center justify-center text-white border-2 border-white shadow-sm shrink-0"><i class="fa-solid fa-robot text-xs"></i></div>
+                                    <div class="ml-3 bg-white p-3 rounded-2xl rounded-tl-none text-kirby-dark shadow-bubbly border border-pink-100 max-w-[85%] text-xs font-medium">Ready to chat about this paper!</div>
+                                </div>
+                            </div>
+                            <div class="p-3 bg-white border-t-2 border-pink-50 shrink-0">
+                                <div class="relative max-w-3xl mx-auto">
+                                    <input type="text" id="chat-input" class="w-full bg-kirby-50/50 border-2 border-pink-100 rounded-full pl-4 pr-12 py-3 text-xs font-bold text-kirby-dark focus:outline-none focus:border-kirby-300 focus:bg-white transition placeholder-kirby-300 shadow-inner" placeholder="Ask me..." onkeypress="if(event.key === 'Enter') sendChatMessage()">
+                                    <button onclick="sendChatMessage()" class="absolute right-2 top-2 w-8 h-8 bg-kirby-500 text-white rounded-full flex items-center justify-center shadow-md hover:bg-kirby-600 transition"><i class="fa-solid fa-paper-plane text-xs"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- BibTeX Modal -->
+    <div id="bibtex-modal" class="fixed inset-0 z-[80] bg-kirby-dark/20 backdrop-blur-sm hidden flex items-center justify-center opacity-0 transition-opacity duration-300">
+        <div class="bg-white p-5 rounded-3xl shadow-2xl max-w-md w-full m-4 border-4 border-kirby-100 transform scale-95 transition-transform duration-300" id="bibtex-box">
+            <div class="flex justify-between items-center mb-3"><h3 class="text-md font-black text-kirby-600">BibTeX</h3><button onclick="toggleBibtex()" class="w-6 h-6 bg-pink-50 rounded-full text-kirby-400 hover:bg-pink-100 flex items-center justify-center"><i class="fa-solid fa-xmark text-xs"></i></button></div>
+            <pre id="bibtex-content" class="bg-slate-50 p-3 rounded-xl text-[10px] font-mono text-slate-600 overflow-x-auto border-2 border-slate-100 mb-3 select-all">Loading...</pre>
+            <div class="flex justify-end"><button onclick="copyBibtex()" class="bg-kirby-500 text-white px-4 py-1.5 rounded-full font-bold text-xs shadow-bubbly hover:translate-y-0.5 active:shadow-none transition">Copy</button></div>
+        </div>
+    </div>
+
+    <!-- Idea Capsule (Shared/Private) -->
+    <div class="fixed bottom-8 right-8 z-50 flex flex-col items-end">
+        <div id="idea-panel" class="mb-4 w-72 glass-panel rounded-3xl hidden transform transition-all origin-bottom-right shadow-2xl border-4 border-white">
+            <div class="p-3 border-b border-pink-100 flex justify-between items-center bg-pink-50/50 rounded-t-3xl">
+                <span class="text-xs font-black text-kirby-600 flex items-center"><i class="fa-solid fa-lightbulb mr-1"></i> Ideas</span>
+                <button onclick="toggleHistory()" class="text-[10px] font-bold text-kirby-400 hover:text-kirby-600 bg-white px-2 py-0.5 rounded-full shadow-sm">History</button>
+            </div>
+            
+            <!-- Input -->
+            <div id="idea-input-mode" class="p-3">
+                <textarea id="idea-text" class="w-full h-20 bg-white/50 border-2 border-pink-100 rounded-xl p-2 text-xs font-medium focus:outline-none focus:border-kirby-300 resize-none text-kirby-dark placeholder-kirby-200" placeholder="Capture a thought..."></textarea>
+                <div class="flex flex-col gap-2 mt-2">
+                    <div class="flex justify-between items-center">
+                        <label class="flex items-center text-[10px] font-bold text-kirby-400 gap-1 cursor-pointer select-none hover:text-kirby-600 transition">
+                            <input type="checkbox" id="share-idea-check" class="accent-kirby-500 w-3 h-3 rounded border-2 border-kirby-200"> 
+                            <span>Share with Room</span>
+                        </label>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <label class="flex items-center text-[10px] font-bold text-kirby-300 gap-1 cursor-pointer select-none">
+                            <input type="checkbox" id="link-paper-check" class="accent-kirby-500" disabled> <span>Link PDF</span>
+                        </label>
+                        <button onclick="saveIdea()" class="bg-kirby-500 text-white text-[10px] font-bold px-4 py-1.5 rounded-full shadow-md hover:bg-kirby-600 transition">Save</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- History -->
+            <div id="idea-history-mode" class="hidden h-60 overflow-y-auto p-3 space-y-2 bg-pink-50/30 custom-scrollbar">
+                <div id="history-list"></div>
+                <button onclick="toggleHistory()" class="w-full text-center text-[10px] font-bold py-2 text-kirby-400 hover:text-kirby-600">Back to Input</button>
+            </div>
+        </div>
+        
+        <!-- Icon -->
+        <button onclick="toggleCapsule()" class="w-14 h-14 bg-kirby-200 rounded-full text-white shadow-bubbly hover:shadow-bubbly-hover hover:scale-110 transition-all duration-300 flex items-center justify-center text-xl border-4 border-white z-50 overflow-hidden relative group">
+            <div class="absolute bottom-1 -left-1 w-5 h-3 bg-kirby-feet rounded-full -rotate-12 group-hover:rotate-0 transition-transform"></div>
+            <div class="absolute bottom-1 -right-1 w-5 h-3 bg-kirby-feet rounded-full rotate-12 group-hover:rotate-0 transition-transform"></div>
+            <div class="relative z-10 flex flex-col items-center mt-1">
+                 <div class="flex space-x-2 mb-1">
+                     <div class="w-1 h-2.5 bg-kirby-dark rounded-full"></div>
+                     <div class="w-1 h-2.5 bg-kirby-dark rounded-full"></div>
+                 </div>
+                 <i class="fa-solid fa-comment-dots text-[10px] text-pink-500"></i>
+            </div>
+        </button>
+    </div>
+
+    <script>
+        // --- Config & Shared State ---
+        const CONFIG = { presets: { deepseek: { url: "https://api.deepseek.com", model: "deepseek-chat" } } };
+        const state = { 
+            apiKey: localStorage.getItem('s_key') || '', 
+            baseUrl: localStorage.getItem('s_url') || CONFIG.presets.deepseek.url, 
+            model: localStorage.getItem('s_model') || CONFIG.presets.deepseek.model,
+            currentPaper: null, 
+            paperText: "", 
+            workspaceId: null,
+            remotePapers: [], // Synced papers
+            deadlines: [
+                { name: "ACL 2026", date: "2026-01-15", url: "https://2026.aclweb.org/", rank: "CCF-A", tag: "NLP" },
+                { name: "CVPR 2026", date: "2025-11-30", url: "https://cvpr.thecvf.com/", rank: "CCF-A", tag: "CV" },
+                { name: "NeurIPS 2025", date: "2025-05-22", url: "https://neurips.cc/", rank: "CCF-A", tag: "AI" },
+                { name: "ICLR 2026", date: "2025-10-01", url: "https://iclr.cc/", rank: "Top AI", tag: "AI" }
+            ] 
+        };
+
+        // --- Init ---
+        window.addEventListener('DOMContentLoaded', () => { 
+            renderDDL(); setupSettings(); 
+            
+            // Listen for Firebase Ready
+            document.addEventListener('firebase-ready', () => {
+                document.getElementById('mode-badge').innerText = "Online Sync";
+                document.getElementById('mode-badge').classList.replace('text-gray-500', 'text-green-600');
+                document.getElementById('mode-badge').classList.replace('border-gray-200', 'border-green-200');
+                document.getElementById('online-indicator').classList.replace('bg-gray-300', 'bg-green-400');
+                document.getElementById('online-indicator').classList.add('animate-pulse');
+                document.getElementById('shared-status-text').innerText = "Sync Active";
+                startRealtimeSync();
+            });
+
+            // Check Local Config on load
+            if (localStorage.getItem('custom_firebase_config')) {
+                document.getElementById('firebase-json-input').value = localStorage.getItem('custom_firebase_config');
+            }
+
+            // Room Logic
+            const urlParams = new URLSearchParams(window.location.search);
+            state.workspaceId = urlParams.get('room');
+            if (!state.workspaceId) {
+                state.workspaceId = Math.random().toString(36).substring(2, 8);
+                try {
+                    const newUrl = `${window.location.pathname}?room=${state.workspaceId}`;
+                    window.history.replaceState({ path: newUrl }, '', newUrl);
+                } catch(e) { console.log("Sandbox History API limit ignored"); }
+            }
+
+            if(typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; 
+        });
+
+        function startRealtimeSync() {
+            if (!window.fb || !window.fb.isReady) return;
+            const { db, doc, onSnapshot, appId } = window.fb;
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'scholar_rooms', state.workspaceId);
+
+            onSnapshot(roomRef, (snap) => {
+                if(snap.exists()) {
+                    const data = snap.data();
+                    // 1. Sync Papers
+                    if(data.papers && JSON.stringify(data.papers) !== JSON.stringify(state.remotePapers)) {
+                        state.remotePapers = data.papers || [];
+                        renderSharedPapersList();
+                    }
+                    // 2. Sync Ideas
+                    if(data.ideas) {
+                        window.remoteIdeas = data.ideas;
+                        if(!document.getElementById('idea-history-mode').classList.contains('hidden')) renderHistory();
+                    }
+                }
+            });
+        }
+
+        // --- Paper Logic (Upload & Sync) ---
+        const fileInput = document.getElementById('file-input');
+        fileInput.addEventListener('change', async (e) => {
+            if (e.target.files.length > 0) {
+                const file = e.target.files[0];
+                playEatingAnimation(file.name); // Kirby Animation
+                try {
+                    const text = await parsePDF(file);
+                    state.paperText = text;
+                    const analysis = await analyzePaper(text);
+                    
+                    const paperObj = {
+                        id: Date.now().toString(),
+                        title: file.name,
+                        analysis: analysis,
+                        bibtex: document.getElementById('bibtex-content').innerText,
+                        uploader: "Teammate",
+                        timestamp: Date.now()
+                    };
+
+                    if (window.fb && window.fb.isReady) {
+                        const { db, doc, setDoc, arrayUnion, appId } = window.fb;
+                        const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'scholar_rooms', state.workspaceId);
+                        await setDoc(roomRef, { papers: arrayUnion(paperObj) }, { merge: true });
+                    } else {
+                        showToast("Offline: Analyzed locally", "info");
+                        state.remotePapers.push(paperObj); // Pseudo sync for local view
+                    }
+                    
+                    loadPaperToView(paperObj);
+
+                } catch (error) {
+                    showToast(error.message, 'error');
+                    resetToUpload("Error!");
+                }
+            }
+        });
+
+        function renderSharedPapersList() {
+            const list = document.getElementById('shared-papers-list');
+            const count = document.getElementById('paper-count');
+            count.innerText = state.remotePapers.length;
+            
+            if(state.remotePapers.length === 0) {
+                list.innerHTML = `<div class="text-center text-[10px] text-kirby-300 py-4 italic">No papers yet...</div>`;
+                return;
+            }
+
+            const sorted = [...state.remotePapers].sort((a,b) => b.timestamp - a.timestamp);
+            
+            list.innerHTML = sorted.map(p => `
+                <div onclick='loadPaperFromID("${p.id}")' class="bg-white p-2 rounded-xl border border-pink-50 shadow-sm hover:shadow-md cursor-pointer transition group">
+                    <div class="flex justify-between items-start">
+                        <div class="text-[11px] font-bold text-kirby-dark truncate w-40">${p.title}</div>
+                        <div class="text-[9px] text-kirby-300">${new Date(p.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                    </div>
+                    <div class="mt-1 flex justify-between items-center">
+                        <span class="text-[9px] bg-kirby-100 text-kirby-500 px-1.5 rounded-full">Ready</span>
+                        <i class="fa-solid fa-chevron-right text-[10px] text-kirby-200 group-hover:text-kirby-500"></i>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        window.loadPaperFromID = function(id) {
+            const paper = state.remotePapers.find(p => p.id === id);
+            if(paper) loadPaperToView(paper);
+        };
+
+        function loadPaperToView(paper) {
+            state.currentPaper = paper;
+            document.getElementById('upload-zone').classList.add('hidden');
+            document.getElementById('workspace-view').classList.remove('hidden');
+            setTimeout(() => document.getElementById('workspace-view').classList.remove('opacity-0'), 50);
+            
+            document.getElementById('status-bubble').classList.replace('bg-gray-300', 'bg-green-400');
+            document.getElementById('current-status').innerText = "Viewing Shared Paper";
+            document.getElementById('paper-title-display').innerText = paper.title;
+            document.getElementById('paper-title-display').classList.remove('hidden');
+            document.getElementById('btn-bibtex').classList.remove('hidden');
+            document.getElementById('btn-delete-paper').classList.remove('hidden');
+            document.getElementById('link-paper-check').disabled = false;
+            document.getElementById('link-paper-check').checked = true;
+
+            const cleanBody = paper.analysis.replace(/```bibtex[\s\S]*?```/g, '');
+            document.getElementById('ai-content').innerHTML = marked.parse(cleanBody);
+            document.getElementById('bibtex-content').innerText = paper.bibtex || "No BibTeX";
+        }
+
+        window.deleteCurrentPaper = async function() {
+            if(!state.currentPaper) return;
+            if(!window.fb || !window.fb.isReady) { 
+                // Local delete simulation
+                state.remotePapers = state.remotePapers.filter(p => p.id !== state.currentPaper.id);
+                renderSharedPapersList();
+                resetToUpload("Paper Removed (Local)");
+                return; 
+            }
+            if(!confirm("Delete from room?")) return;
+            
+            try {
+                const { db, doc, updateDoc, arrayRemove, appId } = window.fb;
+                const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'scholar_rooms', state.workspaceId);
+                await updateDoc(roomRef, { papers: arrayRemove(state.currentPaper) });
+                showToast("Paper Deleted", "success");
+                resetToUpload("Paper Deleted");
+                state.currentPaper = null;
+            } catch(e) { console.error(e); showToast("Delete failed", "error"); }
+        };
+
+        // --- Idea Capsule ---
+        function saveIdea() {
+            const txt = document.getElementById('idea-text').value;
+            if(!txt) return;
+            const link = document.getElementById('link-paper-check').checked && state.currentPaper ? state.currentPaper.title : null;
+            const isShared = document.getElementById('share-idea-check').checked;
+            const note = { id: Date.now(), c: txt, l: link, t: Date.now(), shared: isShared };
+
+            if (isShared && window.fb && window.fb.isReady) {
+                const { db, doc, setDoc, arrayUnion, appId } = window.fb;
+                const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'scholar_rooms', state.workspaceId);
+                setDoc(roomRef, { ideas: arrayUnion(note) }, { merge: true });
+                showToast('Shared! ☁️', 'success');
+            } else {
+                const notes = JSON.parse(localStorage.getItem('k_ideas')||'[]');
+                notes.unshift(note);
+                localStorage.setItem('k_ideas', JSON.stringify(notes));
+                showToast(isShared ? 'Saved (Offline) 🔒' : 'Saved Private 🔒', 'success');
+            }
+            document.getElementById('idea-text').value = '';
+            toggleCapsule();
+        }
+
+        function renderHistory() {
+            const localNotes = JSON.parse(localStorage.getItem('k_ideas')||'[]');
+            const remoteNotes = window.remoteIdeas || [];
+            const all = [...localNotes, ...remoteNotes].sort((a,b) => b.t - a.t);
+            document.getElementById('history-list').innerHTML = all.map(n => {
+                const badge = n.shared ? `<span class="bg-green-100 text-green-600 px-1.5 rounded text-[9px] ml-auto">Shared</span>` : `<span class="bg-gray-100 text-gray-500 px-1.5 rounded text-[9px] ml-auto">Private</span>`;
+                return `<div class="bg-white p-3 rounded-xl border border-pink-100 mb-2 text-xs shadow-sm"><div class="font-medium text-kirby-dark mb-1">${n.c}</div><div class="flex items-center text-kirby-300 text-[9px]">${new Date(n.t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} ${n.l?`<span class="text-kirby-500 ml-1">📎${n.l}</span>`:''} ${badge}</div></div>`;
+            }).join('');
+        }
+
+        // --- Helper Utils ---
+        function copyRoomLink() { 
+            let url = window.location.href;
+            if (!url.includes('room=')) { const s = url.includes('?') ? '&' : '?'; url = `${url}${s}room=${state.workspaceId}`; }
+            navigator.clipboard.writeText(url); 
+            showToast('Link Copied! 🔗', 'success'); 
+        }
+        
+        function playEatingAnimation(filename) {
+            document.getElementById('upload-zone').classList.add('hidden');
+            document.getElementById('kirby-eating-layer').classList.remove('hidden');
+            const mouth = document.getElementById('kirby-mouth'), armL = document.getElementById('arm-l'), armR = document.getElementById('arm-r'), doc = document.getElementById('doc-element'), body = document.getElementById('kirby-body');
+            doc.style.top = "60%"; doc.style.opacity = "0"; doc.style.transform = "scale(1)";
+            mouth.className = "absolute top-16 w-4 h-2 bg-red-400 rounded-b-full transition-all duration-500";
+            setTimeout(() => { mouth.className = "absolute top-14 left-1/2 transform -translate-x-1/2 kirby-mouth-open transition-all duration-300"; armL.style.transform = "rotate(-45deg) translateY(-10px)"; armR.style.transform = "rotate(45deg) translateY(-10px)"; doc.style.opacity = "1"; }, 100);
+            setTimeout(() => { doc.classList.add('doc-being-eaten'); }, 500);
+            setTimeout(() => { doc.style.opacity = "0"; mouth.className = "absolute top-16 left-1/2 transform -translate-x-1/2 w-4 h-2 bg-red-400 rounded-b-full transition-all duration-200"; armL.style.transform = "rotate(0deg)"; armR.style.transform = "rotate(0deg)"; body.classList.add('animate-gulp'); }, 1500);
+            setTimeout(() => { document.getElementById('kirby-eating-layer').classList.add('hidden'); document.getElementById('workspace-view').classList.remove('hidden'); setTimeout(() => document.getElementById('workspace-view').classList.remove('opacity-0'), 50); document.getElementById('status-bubble').classList.replace('bg-gray-300', 'bg-green-400'); document.getElementById('current-status').innerText = "Analysis Ready!"; document.getElementById('paper-title-display').innerText = filename; document.getElementById('paper-title-display').classList.remove('hidden'); document.getElementById('link-paper-check').disabled = false; document.getElementById('link-paper-check').checked = true; body.classList.remove('animate-gulp'); }, 2500);
+        }
+
+        function resetToUpload(msg) {
+             document.getElementById('kirby-eating-layer').classList.add('hidden');
+             document.getElementById('workspace-view').classList.add('hidden');
+             document.getElementById('upload-zone').classList.remove('hidden');
+             document.getElementById('current-status').innerText = msg;
+             document.getElementById('btn-delete-paper').classList.add('hidden');
+             document.getElementById('paper-title-display').classList.add('hidden');
+        }
+
+        async function parsePDF(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+            let fullText = "";
+            const pages = [1, 2, 3, Math.max(4, pdf.numPages - 1), pdf.numPages];
+            const uniquePages = [...new Set(pages.filter(p => p > 0 && p <= pdf.numPages))];
+            for (const pageNum of uniquePages) {
+                const page = await pdf.getPage(pageNum);
+                const content = await page.getTextContent();
+                fullText += content.items.map(item => item.str).join(' ') + "\n";
+            }
+            return fullText;
+        }
+
+        async function analyzePaper(text) {
+            if (!state.apiKey) return "**Please set API Key in sidebar**";
+            const prompt = `Analyze this paper. Output in Markdown in Chinese (中文). 1. **BibTeX**: BibTeX code block. 2. **摘要**: Simple terms. 3. **核心创新点**: Bullet points. 4. **局限性**: Limitation. Text: ${text.substring(0, 15000)}`;
+            const data = await callDeepSeek(prompt);
+            return data;
+        }
+
+        async function sendChatMessage() {
+            const input = document.getElementById('chat-input');
+            const msg = input.value.trim();
+            if(!msg || !state.apiKey) return;
+            addChatBubble(msg, 'user');
+            input.value = '';
+            const loadingId = addChatBubble("Thinking...", 'ai', true);
+            const prompt = `Helpful assistant. Respond in Chinese. Paper: ${state.currentPaper ? state.currentPaper.title : ''} Context: ${state.paperText.substring(0, 20000)}... User: ${msg}`;
+            try {
+                const response = await callDeepSeek(prompt);
+                const el = document.getElementById(loadingId);
+                el.innerHTML = marked.parse(response);
+                el.classList.remove('animate-pulse');
+            } catch (e) { document.getElementById(loadingId).innerText = "Error: " + e.message; }
+        }
+
+        async function callDeepSeek(prompt) {
+            const res = await fetch(`${state.baseUrl}/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${state.apiKey}` }, body: JSON.stringify({ model: state.model, messages: [{ role: "user", content: prompt }], temperature: 0.3, stream: false }) });
+            if (!res.ok) throw new Error(`API Error`);
+            const d = await res.json();
+            return d.choices[0].message.content;
+        }
+
+        function setupSettings() {
+            const urlInput = document.getElementById('base-url-input'), modelInput = document.getElementById('model-name-input'), keyInput = document.getElementById('api-key-input');
+            keyInput.value = state.apiKey; urlInput.value = state.baseUrl; modelInput.value = state.model;
+            const save = () => { state.apiKey = keyInput.value.trim(); state.baseUrl = urlInput.value.trim(); state.model = modelInput.value.trim(); localStorage.setItem('s_key', state.apiKey); localStorage.setItem('s_url', state.baseUrl); localStorage.setItem('s_model', state.model); };
+            [urlInput, modelInput, keyInput].forEach(el => el.addEventListener('input', save));
+        }
+
+        function renderDDL() {
+            const el = document.getElementById('ddl-list'), now = new Date();
+            state.deadlines.sort((a,b)=>new Date(a.date)-new Date(b.date));
+            el.innerHTML = state.deadlines.map(d => {
+                const diff = Math.ceil((new Date(d.date) - now)/(1000*3600*24));
+                if(diff < 0) return '';
+                const bgStyle = d.rank === 'CCF-A' || d.rank === 'Top AI' ? 'bg-amber-50 border-amber-100' : 'bg-white border-pink-50';
+                const tagColor = d.rank === 'CCF-A' ? 'bg-star-gold text-amber-800' : 'bg-kirby-100 text-kirby-500';
+                return `<a href="${d.url}" target="_blank" class="block p-3 rounded-2xl ${bgStyle} text-xs flex justify-between items-center shadow-sm border hover:scale-105 transition cursor-pointer group"><div class="flex flex-col"><span class="font-bold text-kirby-dark group-hover:text-kirby-600 transition">${d.name}</span><div class="flex gap-1 mt-1"><span class="text-[9px] font-bold px-1.5 rounded ${tagColor}">${d.rank}</span><span class="text-[9px] font-bold px-1.5 rounded bg-slate-100 text-slate-500">${d.tag}</span></div></div><div class="flex flex-col items-end"><span class="font-black text-kirby-400">${diff} days</span></div></a>`;
+            }).join('');
+        }
+
+        function switchTab(tab) {
+            const btnA = document.getElementById('tab-analysis'), btnC = document.getElementById('tab-chat'), pA = document.getElementById('panel-analysis'), pC = document.getElementById('panel-chat');
+            if (tab === 'analysis') { btnA.className = "px-5 py-1.5 rounded-full font-bold text-xs transition-all bg-kirby-100 text-kirby-600 shadow-inner"; btnC.className = "px-5 py-1.5 rounded-full font-bold text-xs transition-all text-kirby-300 hover:bg-pink-50"; pA.classList.remove('hidden'); pC.classList.add('hidden'); } 
+            else { btnC.className = "px-5 py-1.5 rounded-full font-bold text-xs transition-all bg-kirby-100 text-kirby-600 shadow-inner"; btnA.className = "px-5 py-1.5 rounded-full font-bold text-xs transition-all text-kirby-300 hover:bg-pink-50"; pC.classList.remove('hidden'); pA.classList.add('hidden'); }
+        }
+
+        function addChatBubble(text, sender, isLoading = false) {
+            const c = document.getElementById('chat-history'), id = 'msg-' + Date.now(), isAI = sender === 'ai';
+            const div = document.createElement('div'); div.className = `flex ${isAI ? 'justify-start' : 'justify-end'} items-start`;
+            const av = isAI ? `<div class="w-8 h-8 rounded-full bg-kirby-400 flex items-center justify-center text-white border-2 border-white shadow-sm shrink-0 mr-2"><i class="fa-solid fa-robot text-xs"></i></div>` : ``;
+            const bc = isAI ? `bg-white text-kirby-dark border border-pink-100 rounded-2xl rounded-tl-none` : `bg-kirby-500 text-white rounded-2xl rounded-tr-none shadow-md`;
+            div.innerHTML = `${av}<div id="${id}" class="p-3 ${bc} shadow-sm text-xs font-medium max-w-[85%] leading-relaxed ${isLoading ? 'animate-pulse text-kirby-300' : ''}">${text}</div>`;
+            c.appendChild(div); c.scrollTop = c.scrollHeight; return id;
+        }
+
+        function toggleBibtex() { const m = document.getElementById('bibtex-modal'), b = document.getElementById('bibtex-box'); if(m.classList.contains('hidden')){ m.classList.remove('hidden'); setTimeout(()=> { m.classList.remove('opacity-0'); b.classList.remove('scale-95'); }, 10); } else { m.classList.add('opacity-0'); b.classList.add('scale-95'); setTimeout(()=> m.classList.add('hidden'), 300); } }
+        function copyBibtex() { navigator.clipboard.writeText(document.getElementById('bibtex-content').innerText); showToast('Copied!', 'success'); toggleBibtex(); }
+        function toggleCapsule() { const p = document.getElementById('idea-panel'); p.classList.toggle('hidden'); if(!p.classList.contains('hidden')) p.classList.remove('scale-95', 'opacity-0'); else p.classList.add('scale-95', 'opacity-0'); }
+        function toggleHistory() { const i = document.getElementById('idea-input-mode'), h = document.getElementById('idea-history-mode'); i.classList.toggle('hidden'); h.classList.toggle('hidden'); renderHistory(); }
+        function showToast(msg, type) { const t = document.createElement('div'), bg = type==='error' ? 'bg-red-400' : 'bg-kirby-500'; t.className = `toast-enter px-6 py-3 rounded-full shadow-lg text-white text-sm font-bold ${bg} border-2 border-white`; t.innerHTML = `<i class="fa-solid ${type==='error'?'fa-circle-exclamation':'fa-check-circle'} mr-2"></i>${msg}`; document.getElementById('toast-container').appendChild(t); setTimeout(()=>t.remove(), 3000); }
+    </script>
+</body>
+</html>
